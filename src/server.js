@@ -5,6 +5,7 @@ const cors = require('cors');
 
 const db = require('./config/db');
 const ollama = require('./services/ollama.service');
+const authRoutes = require('./routes/auth.routes');
 const documentRoutes = require('./routes/document.routes');
 const chatRoutes = require('./routes/chat.routes');
 const {
@@ -57,6 +58,7 @@ app.get(
   })
 );
 
+app.use('/api/auth', authRoutes);
 app.use('/api/documents', documentRoutes);
 app.use('/api/chat', chatRoutes);
 
@@ -94,22 +96,71 @@ async function warnIfPortHijacked() {
  * indexes asynchronously, and querying one that is not yet `queryable`
  * fails. Blocking here means the first upload cannot hit that race.
  */
-async function start() {
-  try {
-    await db.connect();
-    console.log(`[startup] MongoDB Atlas OK (database "${db.DB_NAME}")`);
+async function prepareDatabase() {
+  await db.connect();
+  console.log(`[startup] MongoDB Atlas OK (database "${db.DB_NAME}")`);
 
-    await db.ensureCollectionIndexes();
-    console.log('[startup] collection indexes ready');
+  await db.ensureCollectionIndexes();
+  console.log('[startup] collection indexes ready');
 
-    const index = await db.ensureVectorIndex();
-    console.log(`[startup] vector index ready: ${index.name} (${index.status})`);
-  } catch (err) {
-    // AggregateError (dual-stack connect failure) has an empty message, so
-    // fall back to the name to avoid printing a blank line.
-    console.error(`[startup] database check failed: ${err.message || err.name}`);
-    process.exit(1);
+  const index = await db.ensureVectorIndex();
+  console.log(`[startup] vector index ready: ${index.name} (${index.status})`);
+}
+
+/**
+ * A connection timeout is almost never a bug in this app, so say what to go
+ * and check instead of printing a bare stack trace.
+ */
+function explainDatabaseFailure(err) {
+  const message = err.message || err.name;
+  console.error(`\n[startup] Cannot reach MongoDB: ${message}`);
+
+  if (/timed out|ETIMEDOUT|ENOTFOUND|ECONNREFUSED/i.test(message)) {
+    console.error(
+      '\n  DNS resolves but nothing answers on port 27017. In order of likelihood:\n' +
+        '    1. Your IP is not in Atlas > Network Access. "Add current IP address" pins\n' +
+        '       ONE address, so a new Wi-Fi network, a VPN toggle or an ISP reassignment\n' +
+        '       silently breaks it. Re-add it, and check the entry has not expired.\n' +
+        '    2. The cluster is paused. A free M0 auto-pauses after inactivity and behaves\n' +
+        '       exactly like this - the Atlas dashboard shows a Resume button.\n' +
+        '    3. Port 27017 is blocked on this network (common on office/college Wi-Fi and\n' +
+        '       some VPNs). Test with:  nc -vz <shard-host> 27017\n' +
+        '       Tethering to your phone for 30 seconds tells you straight away.\n'
+    );
   }
+}
+
+/**
+ * Keep trying to reach Atlas instead of exiting on the first failure.
+ *
+ * Exiting made nodemon print "app crashed" and then sit there until a file
+ * changed, so a brief network blip meant restarting the dev server by hand.
+ * Retrying in the background means the server picks the database up by itself
+ * the moment it is reachable - including the moment you fix the allowlist.
+ */
+async function connectWithRetry({ delayMs = 10000 } = {}) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await prepareDatabase();
+      if (attempt > 1) console.log('[startup] database recovered, all routes are live');
+      return true;
+    } catch (err) {
+      if (attempt === 1) {
+        explainDatabaseFailure(err);
+      } else {
+        console.warn(`[startup] database still unreachable (attempt ${attempt}), retrying...`);
+      }
+      // Until this succeeds every route that touches the database answers 503
+      // via the error handler, and /api/health reports mongodb as unreachable.
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+}
+
+async function start() {
+  // Not awaited: the server comes up either way, so nodemon stays alive and
+  // /api/health can tell you exactly which dependency is missing.
+  connectWithRetry();
 
   const health = await ollama.checkHealth();
   if (!health.reachable) {

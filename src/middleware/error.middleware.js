@@ -60,7 +60,12 @@ function errorHandler(err, req, res, next) {
     message = 'That document already exists.';
   }
 
-  if (status >= 500) {
+  // An ApiError is a condition we decided to report, so it gets one readable
+  // line however severe its status is. A stack trace is only useful for the
+  // errors nobody planned for - and a deliberate 503 (database still
+  // connecting) would otherwise dump one on every single request.
+  const deliberate = err instanceof ApiError;
+  if (status >= 500 && !deliberate) {
     console.error('[error]', err);
   } else {
     console.warn('[warn]', message);
@@ -69,7 +74,9 @@ function errorHandler(err, req, res, next) {
   const body = { success: false, error: message };
   if (err.details) body.details = err.details;
   // Stack traces are for developers only - never leak them in production.
-  if (process.env.NODE_ENV !== 'production' && status >= 500) body.stack = err.stack;
+  if (process.env.NODE_ENV !== 'production' && status >= 500 && !deliberate) {
+    body.stack = err.stack;
+  }
 
   res.status(status).json(body);
 }

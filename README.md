@@ -110,20 +110,26 @@ src/
 ├── config/db.js                   MongoClient, collections, GridFS bucket,
 │                                  vector-index creation + readiness wait
 ├── routes/
+│   ├── auth.routes.js             signup, login, me, logout
 │   ├── document.routes.js         multer upload config + document routes
 │   └── chat.routes.js             chat route
 ├── controllers/
+│   ├── auth.controller.js         signup/login request + response shaping
 │   ├── document.controller.js     upload, list, get, chunks, download, delete
 │   └── chat.controller.js         request/response + input validation for chat
 ├── services/
+│   ├── auth.service.js            accounts, bcrypt hashing, JWT issue/verify
 │   ├── ollama.service.js          the only place that talks HTTP to Ollama
 │   ├── embedding.service.js       text -> vector (+ dimension validation)
 │   ├── document.service.js        INGESTION pipeline + GridFS + cascade delete
 │   └── rag.service.js             RETRIEVAL pipeline + prompt
 ├── utils/
 │   ├── chunkText.js               cleaning + overlapping chunking
+│   ├── validators.js              signup/login field validation + normalizing
 │   └── pdfParser.js               PDF -> per-page text
-└── middleware/error.middleware.js ApiError, asyncHandler, central error handler
+└── middleware/
+    ├── auth.middleware.js         requireAuth / optionalAuth bearer-token gate
+    └── error.middleware.js        ApiError, asyncHandler, central error handler
 ```
 
 The layering rule: **routes** wire URLs, **controllers** validate input and shape
@@ -179,6 +185,13 @@ CHUNK_SIZE=900
 CHUNK_OVERLAP=150
 TOP_K=5
 MAX_UPLOAD_MB=20
+
+# Auth - JWT_SECRET must be long and random, anyone who knows it can mint
+# a valid session. Generate one with:
+#   node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
+JWT_SECRET=<a long random string>
+JWT_EXPIRES_IN=7d
+BCRYPT_ROUNDS=12
 ```
 
 `.env` is git-ignored. No credential appears anywhere in the source.
@@ -579,6 +592,10 @@ doing on day one.
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/api/health` | liveness + reachability of MongoDB and Ollama |
+| `POST` | `/api/auth/signup` | create a company account, returns a token |
+| `POST` | `/api/auth/login` | log in with email **or** phone number + password |
+| `GET` | `/api/auth/me` | the signed-in account (needs a bearer token) |
+| `POST` | `/api/auth/logout` | client-side token discard |
 | `POST` | `/api/documents/validate` | pre-flight: are these PDFs resumes? (stores nothing) |
 | `POST` | `/api/documents/upload` | ingest one or more resumes (`multipart/form-data`, field `files`) |
 | `GET` | `/api/documents` | list stored PDFs (`?limit=&offset=`) |
@@ -588,6 +605,86 @@ doing on day one.
 | `DELETE` | `/api/documents/:id` | delete one PDF, its chunks and its bytes |
 | `DELETE` | `/api/documents` | wipe the knowledge base |
 | `POST` | `/api/chat` | ask a question (`{ "question", "topK", "fileIds" }`) |
+
+### Auth
+
+**Sign up.** The account *is* the company account, so the company details are
+captured here - there is no separate "create organization" step. Both an email
+and a phone number are required, because either one can be used to log in.
+
+```bash
+curl -X POST http://localhost:5000/api/auth/signup \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "fullName": "Ada Lovelace",
+    "email": "ada@example.com",
+    "phone": "+91 98765 43210",
+    "companyName": "Analytical Engines",
+    "designation": "Head of Engineering",
+    "employeeStrength": "51-200",
+    "companyIndustry": "Software",
+    "password": "Numbers123",
+    "confirmPassword": "Numbers123"
+  }'
+```
+
+`employeeStrength` is one of `1-10`, `11-50`, `51-200`, `201-500`, `501-1000`,
+`1000+` - a raw headcount like `250` is accepted too and mapped into its band.
+
+Passwords need at least 8 characters including a letter and a number, and
+`confirmPassword` must match. Signup answers **201** with the same
+`{ user, token }` shape login does, so the frontend can drop the new user
+straight into the app:
+
+```json
+{
+  "success": true,
+  "message": "Account created.",
+  "user": { "id": "...", "fullName": "Ada Lovelace", "email": "ada@example.com", "phone": "+919876543210", "companyName": "Analytical Engines", "designation": "Head of Engineering", "employeeStrength": "51-200", "companyIndustry": "Software" },
+  "token": "eyJhbGciOiJIUzI1NiIs...",
+  "expiresAt": "2026-09-22T10:00:00.000Z"
+}
+```
+
+**Log in.** One field, `identifier`, covers both ways in - an `@` means email,
+anything else is read as a phone number. The frontend needs a single input box,
+not a toggle. (`email` or `phone` are accepted instead of `identifier` if your
+form has two separate fields.)
+
+```bash
+curl -X POST http://localhost:5000/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{ "identifier": "ada@example.com", "password": "Numbers123" }'
+
+curl -X POST http://localhost:5000/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{ "identifier": "9876543210", "password": "Numbers123" }'
+```
+
+Phone numbers are normalized, so `+91 98765-43210`, `(+91) 9876543210` and a
+bare `9876543210` all reach the same account. If two accounts from different
+countries share those last 10 digits, login answers **409** asking for the
+country code rather than guessing which person is signing in.
+
+A wrong password and an unknown account give the **same** 401 and take the same
+time, so the endpoint cannot be used to discover which emails and phone numbers
+are registered.
+
+**Use the token** on any protected route:
+
+```bash
+curl http://localhost:5000/api/auth/me -H "Authorization: Bearer $TOKEN"
+```
+
+To put an existing route behind a login, add the middleware in front of it:
+
+```js
+const { requireAuth } = require('../middleware/auth.middleware');
+router.post('/', requireAuth, asyncHandler(controller.chat));
+```
+
+The handler then has `req.user` and `req.userId`. The document and chat routes
+are **not** gated yet - they still accept anonymous requests.
 
 ### Health check
 
