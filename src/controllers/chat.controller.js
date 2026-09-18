@@ -32,6 +32,7 @@ async function chat(req, res) {
     sources: result.sources,
     ...(result.note ? { note: result.note } : {}),
     tookMs: Date.now() - started,
+    usage: req.promptUsage,
   });
 }
 

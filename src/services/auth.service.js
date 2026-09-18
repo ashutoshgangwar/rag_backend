@@ -71,6 +71,10 @@ async function signup(payload = {}) {
     // types their number without the country code.
     phoneNational: nationalDigits(user.phone),
     passwordHash: await bcrypt.hash(password, BCRYPT_ROUNDS),
+    // Admins are promoted by editing this field in MongoDB - never via the API.
+    role: 'user',
+    // Lifetime count of prompts; the free tier is measured against it.
+    promptsUsed: 0,
     createdAt: new Date(),
     updatedAt: new Date(),
     lastLoginAt: null,
@@ -222,6 +226,8 @@ function toPublicUser(user) {
     designation: user.designation,
     employeeStrength: user.employeeStrength,
     companyIndustry: user.companyIndustry,
+    role: user.role || 'user',
+    promptsUsed: user.promptsUsed || 0,
     createdAt: user.createdAt,
     lastLoginAt: user.lastLoginAt,
   };

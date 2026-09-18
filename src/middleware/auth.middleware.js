@@ -53,4 +53,13 @@ async function optionalAuth(req, res, next) {
   }
 }
 
-module.exports = { requireAuth, optionalAuth };
+/**
+ * Admin-only gate, placed after requireAuth. A user becomes an admin by
+ * setting `role: "admin"` on their document in the `users` collection.
+ */
+function requireAdmin(req, res, next) {
+  if (req.user?.role !== 'admin') return next(new ApiError(403, 'Admin access required.'));
+  next();
+}
+
+module.exports = { requireAuth, optionalAuth, requireAdmin };

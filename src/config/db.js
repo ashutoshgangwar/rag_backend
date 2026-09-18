@@ -8,6 +8,9 @@ const CHUNKS_COLLECTION = process.env.MONGODB_COLLECTION_NAME || 'chunks';
 const USERS_COLLECTION = 'users';
 const AGENTS_COLLECTION = 'agents';
 const AGENT_RUNS_COLLECTION = 'agent_runs';
+const PLANS_COLLECTION = 'plans';
+const SUBSCRIPTIONS_COLLECTION = 'subscriptions';
+const SETTINGS_COLLECTION = 'settings';
 const BUCKET_NAME = 'pdfs';
 
 /** The Atlas Vector Search index that powers $vectorSearch on `chunks`. */
@@ -52,6 +55,9 @@ const chunks = () => getDb().collection(CHUNKS_COLLECTION);
 const users = () => getDb().collection(USERS_COLLECTION);
 const agents = () => getDb().collection(AGENTS_COLLECTION);
 const agentRuns = () => getDb().collection(AGENT_RUNS_COLLECTION);
+const plans = () => getDb().collection(PLANS_COLLECTION);
+const subscriptions = () => getDb().collection(SUBSCRIPTIONS_COLLECTION);
+const settings = () => getDb().collection(SETTINGS_COLLECTION);
 
 /** GridFS bucket holding the original PDF bytes (pdfs.files / pdfs.chunks). */
 const bucket = () => new GridFSBucket(getDb(), { bucketName: BUCKET_NAME });
@@ -80,6 +86,12 @@ async function ensureCollectionIndexes() {
   // user's runs are always read newest-first within that user.
   await agents().createIndex({ id: 1 }, { unique: true, name: 'agents_id_unique' });
   await agentRuns().createIndex({ userId: 1, createdAt: -1 }, { name: 'agent_runs_user_created_idx' });
+
+  // Plans are addressed by their slug (`daily`, `monthly`, `yearly`). The
+  // "is this user subscribed right now?" check reads the latest-ending
+  // subscription of one user on every prompt, so that path is indexed.
+  await plans().createIndex({ id: 1 }, { unique: true, name: 'plans_id_unique' });
+  await subscriptions().createIndex({ userId: 1, endsAt: -1 }, { name: 'subscriptions_user_ends_idx' });
 }
 
 async function ensureVectorIndex({ waitMs = 120000 } = {}) {
@@ -152,6 +164,9 @@ module.exports = {
   users,
   agents,
   agentRuns,
+  plans,
+  subscriptions,
+  settings,
   bucket,
   ping,
   ensureCollectionIndexes,
@@ -162,6 +177,9 @@ module.exports = {
   USERS_COLLECTION,
   AGENTS_COLLECTION,
   AGENT_RUNS_COLLECTION,
+  PLANS_COLLECTION,
+  SUBSCRIPTIONS_COLLECTION,
+  SETTINGS_COLLECTION,
   VECTOR_INDEX_NAME,
   EMBEDDING_DIMENSION,
 };

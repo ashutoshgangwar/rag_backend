@@ -20,6 +20,7 @@ async function run(req, res) {
     runId: result.runId,
     result: { kind: 'answer', text: result.text },
     tookMs: result.tookMs,
+    usage: req.promptUsage,
   });
 }
 
@@ -37,7 +38,7 @@ async function followUp(req, res) {
   }
 
   const result = await agentService.followUp(req.params.runId, trimmed, req.userId);
-  res.json({ success: true, text: result.text, tookMs: result.tookMs });
+  res.json({ success: true, text: result.text, tookMs: result.tookMs, usage: req.promptUsage });
 }
 
 module.exports = { list, run, followUp };

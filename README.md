@@ -604,10 +604,19 @@ doing on day one.
 | `GET` | `/api/documents/:id/download` | stream back the original PDF |
 | `DELETE` | `/api/documents/:id` | delete one PDF, its chunks and its bytes |
 | `DELETE` | `/api/documents` | wipe the knowledge base |
-| `POST` | `/api/chat` | ask a question (`{ "question", "topK", "fileIds" }`) |
+| `POST` | `/api/chat` | ask a question (`{ "question", "topK", "fileIds" }`) - bearer token, uses a prompt |
 | `GET` | `/api/agents` | the AI agent catalog (needs a bearer token) |
 | `POST` | `/api/agents/:agentId/run` | run an agent on a filled-in form |
 | `POST` | `/api/agents/runs/:runId/messages` | ask a follow-up on an earlier run |
+| `GET` | `/api/subscriptions/plans` | active plans + the free prompt limit (public) |
+| `GET` | `/api/subscriptions/me` | prompts used/remaining and the active subscription |
+| `POST` | `/api/subscriptions/subscribe` | buy a plan (`{ "planId": "monthly" }`) |
+| `GET` | `/api/subscriptions/history` | every subscription this user bought |
+| `GET` | `/api/admin/plans` | all plans, inactive included (admin) |
+| `POST` | `/api/admin/plans` | create a plan (admin) |
+| `PATCH` | `/api/admin/plans/:planId` | change amount / name / duration / `active` (admin) |
+| `GET` | `/api/admin/settings` | billing settings (admin) |
+| `PATCH` | `/api/admin/settings` | change `freePromptLimit` (admin) |
 
 ### Auth
 
@@ -686,8 +695,51 @@ const { requireAuth } = require('../middleware/auth.middleware');
 router.post('/', requireAuth, asyncHandler(controller.chat));
 ```
 
-The handler then has `req.user` and `req.userId`. The document and chat routes
-are **not** gated yet - they still accept anonymous requests.
+The handler then has `req.user` and `req.userId`. The document routes are
+**not** gated yet - they still accept anonymous requests. Chat needs a token,
+because every question is metered (see Subscriptions API).
+
+### Subscriptions API
+
+Every prompt - `POST /api/chat`, an agent run, an agent follow-up - is metered.
+A user gets `freePromptLimit` free prompts (5 by default) for the lifetime of
+the account; after that the prompt routes answer **402** until they subscribe:
+
+```json
+{ "success": false, "error": "You have used all 5 free prompts. Subscribe to a plan to continue.",
+  "details": { "code": "SUBSCRIPTION_REQUIRED", "freePromptLimit": 5, "plans": [ ... ] } }
+```
+
+A request that fails (bad input, model error) gives its prompt back. Successful
+prompt responses carry `usage: { subscribed, freePromptsRemaining }`.
+
+**Everything is configured in MongoDB.** On first startup the app seeds:
+
+- `plans`: `daily` (49 INR, 1 day), `monthly` (499 INR, 1 month), `yearly` (4999 INR, 1 year)
+- `settings`: `{ _id: "billing", freePromptLimit: 5 }`
+
+Seeding only inserts missing documents, so changes you make are never overwritten.
+Edit `amount`, `currency`, `interval` (`day`/`month`/`year`), `intervalCount`,
+`name` or `active` directly in Atlas, or through the admin API. The change
+applies to the next request, with no restart. A subscription keeps the price it
+was bought at.
+
+**Admins**: set `role: "admin"` on a user document in the `users` collection.
+
+```bash
+curl -X PATCH http://localhost:5000/api/admin/plans/monthly \
+  -H "Authorization: Bearer $ADMIN_TOKEN" -H 'Content-Type: application/json' \
+  -d '{ "amount": 399 }'
+
+curl -X PATCH http://localhost:5000/api/admin/settings \
+  -H "Authorization: Bearer $ADMIN_TOKEN" -H 'Content-Type: application/json' \
+  -d '{ "freePromptLimit": 10 }'
+```
+
+**Subscribe** - `POST /api/subscriptions/subscribe` with `{ "planId": "monthly" }`.
+Buying again while subscribed stacks the new period after the current one.
+No payment gateway is wired in yet, so this activates the plan straight away.
+Put the gateway's order/verify step in front of it before going live.
 
 ### Agents API
 
