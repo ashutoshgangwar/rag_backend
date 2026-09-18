@@ -8,6 +8,8 @@ const ollama = require('./services/ollama.service');
 const authRoutes = require('./routes/auth.routes');
 const documentRoutes = require('./routes/document.routes');
 const chatRoutes = require('./routes/chat.routes');
+const agentRoutes = require('./routes/agent.routes');
+const agentService = require('./services/agent.service');
 const {
   errorHandler,
   notFoundHandler,
@@ -61,6 +63,7 @@ app.get(
 app.use('/api/auth', authRoutes);
 app.use('/api/documents', documentRoutes);
 app.use('/api/chat', chatRoutes);
+app.use('/api/agents', agentRoutes);
 
 // 404 first, then the centralized error handler (must be last).
 app.use(notFoundHandler);
@@ -102,6 +105,9 @@ async function prepareDatabase() {
 
   await db.ensureCollectionIndexes();
   console.log('[startup] collection indexes ready');
+
+  const seeded = await agentService.ensureAgents();
+  console.log(`[startup] agent catalog ready (${seeded} agents)`);
 
   const index = await db.ensureVectorIndex();
   console.log(`[startup] vector index ready: ${index.name} (${index.status})`);

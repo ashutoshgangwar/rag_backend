@@ -57,7 +57,9 @@ async function callOllama(path, body, timeoutMs = 120000) {
  * stream:false => Ollama replies with one complete JSON object.
  *
  * @param {string} prompt
- * @param {{ temperature?: number }} [options]
+ * @param {{ temperature?: number, numCtx?: number }} [options]
+ *   numCtx raises Ollama's context window (num_ctx) for long prompts; when it
+ *   is not set the model's default is used, exactly as before.
  * @returns {Promise<string>} only the generated text
  */
 async function generateAnswer(prompt, options = {}) {
@@ -69,6 +71,7 @@ async function generateAnswer(prompt, options = {}) {
       // Low temperature keeps the model close to the retrieved context
       // instead of inventing things.
       temperature: options.temperature ?? 0.2,
+      ...(options.numCtx !== undefined ? { num_ctx: options.numCtx } : {}),
     },
   });
 

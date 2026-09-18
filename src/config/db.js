@@ -6,6 +6,8 @@ const DB_NAME = process.env.MONGODB_DB_NAME || 'rag_db';
 const FILES_COLLECTION = 'files';
 const CHUNKS_COLLECTION = process.env.MONGODB_COLLECTION_NAME || 'chunks';
 const USERS_COLLECTION = 'users';
+const AGENTS_COLLECTION = 'agents';
+const AGENT_RUNS_COLLECTION = 'agent_runs';
 const BUCKET_NAME = 'pdfs';
 
 /** The Atlas Vector Search index that powers $vectorSearch on `chunks`. */
@@ -48,6 +50,8 @@ function getDb() {
 const files = () => getDb().collection(FILES_COLLECTION);
 const chunks = () => getDb().collection(CHUNKS_COLLECTION);
 const users = () => getDb().collection(USERS_COLLECTION);
+const agents = () => getDb().collection(AGENTS_COLLECTION);
+const agentRuns = () => getDb().collection(AGENT_RUNS_COLLECTION);
 
 /** GridFS bucket holding the original PDF bytes (pdfs.files / pdfs.chunks). */
 const bucket = () => new GridFSBucket(getDb(), { bucketName: BUCKET_NAME });
@@ -71,6 +75,11 @@ async function ensureCollectionIndexes() {
   // different country codes. It only speeds up the login fallback lookup.
   await users().createIndex({ phoneNational: 1 }, { name: 'users_phone_national_idx' });
   await users().createIndex({ createdAt: -1 }, { name: 'users_created_idx' });
+
+  // Agents are looked up by their public slug (`tutor`, `email`, ...), and a
+  // user's runs are always read newest-first within that user.
+  await agents().createIndex({ id: 1 }, { unique: true, name: 'agents_id_unique' });
+  await agentRuns().createIndex({ userId: 1, createdAt: -1 }, { name: 'agent_runs_user_created_idx' });
 }
 
 async function ensureVectorIndex({ waitMs = 120000 } = {}) {
@@ -141,6 +150,8 @@ module.exports = {
   files,
   chunks,
   users,
+  agents,
+  agentRuns,
   bucket,
   ping,
   ensureCollectionIndexes,
@@ -149,6 +160,8 @@ module.exports = {
   DB_NAME,
   CHUNKS_COLLECTION,
   USERS_COLLECTION,
+  AGENTS_COLLECTION,
+  AGENT_RUNS_COLLECTION,
   VECTOR_INDEX_NAME,
   EMBEDDING_DIMENSION,
 };

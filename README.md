@@ -605,6 +605,9 @@ doing on day one.
 | `DELETE` | `/api/documents/:id` | delete one PDF, its chunks and its bytes |
 | `DELETE` | `/api/documents` | wipe the knowledge base |
 | `POST` | `/api/chat` | ask a question (`{ "question", "topK", "fileIds" }`) |
+| `GET` | `/api/agents` | the AI agent catalog (needs a bearer token) |
+| `POST` | `/api/agents/:agentId/run` | run an agent on a filled-in form |
+| `POST` | `/api/agents/runs/:runId/messages` | ask a follow-up on an earlier run |
 
 ### Auth
 
@@ -685,6 +688,61 @@ router.post('/', requireAuth, asyncHandler(controller.chat));
 
 The handler then has `req.user` and `req.userId`. The document and chat routes
 are **not** gated yet - they still accept anonymous requests.
+
+### Agents API
+
+Form-driven helpers (Study Q&A, Email Writer, Trip Planner, ...) on top of the
+local `llama3.2`. They only **write text** - answers, drafts, plans. Nothing is
+booked, sent or fetched live, and no embeddings or `$vectorSearch` are involved.
+All three routes need a bearer token.
+
+The catalog lives in `src/agents/catalog.js` and is upserted into the `agents`
+collection by `id` on every startup. Extra fields on a stored agent survive, and
+an agent inserted straight into MongoDB shows up too (`enabled: false` hides one).
+Runs are stored per user in `agent_runs`.
+
+**List agents** - `GET /api/agents`
+
+```json
+{ "success": true, "groups": [{ "id": "education", "label": "Education" }], "agents": [{ "id": "tutor", "name": "Study Q&A", "fields": [] }] }
+```
+
+**Run an agent** - `POST /api/agents/:agentId/run`
+
+```bash
+curl -X POST http://localhost:5000/api/agents/tutor/run \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{ "input": { "subject": "Physics", "level": "School", "request": "What is inertia?" } }'
+```
+
+```json
+{ "success": true, "runId": "66f0c2...", "result": { "kind": "answer", "text": "## Inertia\n..." }, "tookMs": 1234 }
+```
+
+`input` is checked against the agent's `fields`: required fields must be
+non-empty, a `select` value must be one of its `options`, a `number` must be
+within `min`/`max`, `text` is capped at 300 characters and `textarea` at 6000
+(12000 in total). A failure is a **400** naming every bad field:
+
+```json
+{ "success": false, "error": "Your question is required.", "details": { "fields": { "request": "Your question is required." } } }
+```
+
+**Follow up** - `POST /api/agents/runs/:runId/messages`
+
+```bash
+curl -X POST http://localhost:5000/api/agents/runs/$RUN_ID/messages \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{ "question": "Give one more example" }'
+```
+
+```json
+{ "success": true, "text": "...", "tookMs": 1234 }
+```
+
+`question` is capped at 1000 characters. The model sees the original brief and
+the last 6 messages. Another user's run answers **404** exactly like a missing
+one, and a conversation stops at 40 messages (**409**).
 
 ### Health check
 
